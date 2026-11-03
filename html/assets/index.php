@@ -3,27 +3,40 @@ require_once __DIR__ . '/../includes/header.php';
 
 $pdo = getDBConnection();
 
-// Dynamic Search & Filtering parameters
-$search = trim($_GET['search'] ?? '');
+// 1. Search & Filtering Parameters
+$search      = trim($_GET['search'] ?? '');
 $category_id = filter_input(INPUT_GET, 'category_id', FILTER_VALIDATE_INT);
-$status = trim($_GET['status'] ?? '');
+$location_id = filter_input(INPUT_GET, 'location_id', FILTER_VALIDATE_INT);
+$brand_id    = filter_input(INPUT_GET, 'brand_id', FILTER_VALIDATE_INT);
+$status      = trim($_GET['status'] ?? '');
 
-// Pagination Settings
-$limit = 10;
-$page = filter_input(INPUT_GET, 'page', FILTER_VALIDATE_INT) ?: 1;
+// 2. Pagination Settings
+$limit  = 10;
+$page   = filter_input(INPUT_GET, 'page', FILTER_VALIDATE_INT) ?: 1;
+if ($page < 1) { $page = 1; }
 $offset = ($page - 1) * $limit;
 
-// Build Query Conditions Dynamically
-$where = [];
+// 3. Dynamic Query Conditions (Using unique search parameters)
+$where  = [];
 $params = [];
 
 if ($search !== '') {
-    $where[] = "(a.asset_tag LIKE :search OR a.name LIKE :search OR a.serial_number LIKE :search)";
-    $params['search'] = "%{$search}%";
+    $where[] = "(a.asset_tag LIKE :search_tag OR a.name LIKE :search_name OR a.serial_number LIKE :search_serial)";
+    $params['search_tag']    = "%{$search}%";
+    $params['search_name']   = "%{$search}%";
+    $params['search_serial'] = "%{$search}%";
 }
 if ($category_id) {
     $where[] = "a.category_id = :category_id";
     $params['category_id'] = $category_id;
+}
+if ($location_id) {
+    $where[] = "a.location_id = :location_id";
+    $params['location_id'] = $location_id;
+}
+if ($brand_id) {
+    $where[] = "a.brand_id = :brand_id";
+    $params['brand_id'] = $brand_id;
 }
 if ($status !== '') {
     $where[] = "a.status = :status";
@@ -32,46 +45,71 @@ if ($status !== '') {
 
 $whereSQL = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
-// Count Total Records
+// 4. Count Filtered Records
 $countStmt = $pdo->prepare("SELECT COUNT(*) FROM assets a $whereSQL");
 $countStmt->execute($params);
-$totalAssets = $countStmt->fetchColumn();
-$totalPages = ceil($totalAssets / $limit);
+$totalAssets = (int)$countStmt->fetchColumn();
+$totalPages  = $totalAssets > 0 ? (int)ceil($totalAssets / $limit) : 1;
 
-// Fetch Assets Page Records
-$sql = "SELECT a.*, c.name AS category_name 
+// 5. Fetch Assets
+$sql = "SELECT a.*, 
+               c.name AS category_name, 
+               l.name AS location_name, 
+               b.name AS brand_name 
         FROM assets a 
         LEFT JOIN categories c ON a.category_id = c.id 
+        LEFT JOIN locations l ON a.location_id = l.id 
+        LEFT JOIN brands b ON a.brand_id = b.id 
         $whereSQL 
         ORDER BY a.id DESC 
         LIMIT :limit OFFSET :offset";
 
 $stmt = $pdo->prepare($sql);
+
 foreach ($params as $key => $val) {
     $stmt->bindValue(":$key", $val);
 }
-$stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-$stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+$stmt->bindValue(':limit', (int)$limit, PDO::PARAM_INT);
+$stmt->bindValue(':offset', (int)$offset, PDO::PARAM_INT);
+
 $stmt->execute();
 $assets = $stmt->fetchAll();
 
-// Fetch Categories for Filter Dropdown
+// 6. Fetch Dropdowns Safely
 $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAll();
+$locations  = $pdo->query("SELECT * FROM locations ORDER BY name ASC")->fetchAll();
+
+try {
+    $brands = $pdo->query("SELECT * FROM brands ORDER BY name ASC")->fetchAll();
+} catch (PDOException $e) {
+    $brands = [];
+}
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="bi-box-seam me-2"></i>Asset Directory</h2>
-    <a href="/assets/create.php" class="btn btn-primary"><i class="bi-plus-circle me-1"></i> Add New Asset</a>
+    <div class="d-flex gap-2">
+        <a href="/assets/export.php?<?= http_build_query($_GET); ?>" class="btn btn-outline-success">
+            <i class="bi-file-earmark-spreadsheet me-1"></i> Export CSV
+        </a>
+      <!-- Import Button -->
+        <a href="/assets/import.php" class="btn btn-outline-primary">
+            <i class="bi-file-earmark-arrow-up me-1"></i> Import CSV
+        </a>
+        <a href="/assets/create.php" class="btn btn-primary">
+            <i class="bi-plus-circle me-1"></i> Add New Asset
+        </a>
+    </div>
 </div>
 
-<!-- Search and Filter Form -->
+<!-- Search and Filter Bar -->
 <div class="card mb-4 shadow-sm">
     <div class="card-body">
         <form method="GET" action="/assets/index.php" class="row g-3">
-            <div class="col-md-4">
-                <input type="text" name="search" class="form-control" placeholder="Search Tag, Name, or Serial..." value="<?= sanitize($search); ?>">
-            </div>
             <div class="col-md-3">
+                <input type="text" name="search" class="form-control" placeholder="Search Tag, Name, Serial..." value="<?= sanitize($search); ?>">
+            </div>
+            <div class="col-md-2">
                 <select name="category_id" class="form-select">
                     <option value="">All Categories</option>
                     <?php foreach ($categories as $cat): ?>
@@ -81,7 +119,27 @@ $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAl
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-2">
+                <select name="brand_id" class="form-select">
+                    <option value="">All Brands</option>
+                    <?php foreach ($brands as $b): ?>
+                        <option value="<?= $b['id']; ?>" <?= $brand_id == $b['id'] ? 'selected' : ''; ?>>
+                            <?= sanitize($b['name']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select name="location_id" class="form-select">
+                    <option value="">All Locations</option>
+                    <?php foreach ($locations as $loc): ?>
+                        <option value="<?= $loc['id']; ?>" <?= $location_id == $loc['id'] ? 'selected' : ''; ?>>
+                            <?= sanitize($loc['name']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div class="col-md-2">
                 <select name="status" class="form-select">
                     <option value="">All Statuses</option>
                     <?php foreach (['Available', 'In Use', 'Under Maintenance', 'Retired'] as $st): ?>
@@ -89,9 +147,9 @@ $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAl
                     <?php endforeach; ?>
                 </select>
             </div>
-            <div class="col-md-2 d-flex gap-2">
-                <button type="submit" class="btn btn-secondary w-100"><i class="bi-filter me-1"></i> Filter</button>
-                <a href="/assets/index.php" class="btn btn-outline-secondary">Reset</a>
+            <div class="col-md-1 d-flex gap-1">
+                <button type="submit" class="btn btn-secondary w-100" title="Filter"><i class="bi-filter"></i></button>
+                <a href="/assets/index.php" class="btn btn-outline-secondary" title="Reset"><i class="bi-arrow-counterclockwise"></i></a>
             </div>
         </form>
     </div>
@@ -105,8 +163,9 @@ $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAl
                 <th>Tag</th>
                 <th>Name</th>
                 <th>Category</th>
+                <th>Brand</th>
+                <th>Location</th>
                 <th>Status</th>
-                <th>Purchase Date</th>
                 <th>Cost</th>
                 <th class="text-end">Actions</th>
             </tr>
@@ -114,7 +173,7 @@ $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAl
         <tbody>
             <?php if (empty($assets)): ?>
                 <tr>
-                    <td colspan="7" class="text-center text-muted py-4">No assets found matching your criteria.</td>
+                    <td colspan="8" class="text-center text-muted py-4">No assets found matching your criteria.</td>
                 </tr>
             <?php else: ?>
                 <?php foreach ($assets as $asset): ?>
@@ -122,6 +181,8 @@ $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAl
                         <td><strong><?= sanitize($asset['asset_tag']); ?></strong></td>
                         <td><?= sanitize($asset['name']); ?></td>
                         <td><?= sanitize($asset['category_name'] ?? 'Uncategorized'); ?></td>
+                        <td><?= sanitize($asset['brand_name'] ?? 'Unassigned'); ?></td>
+                        <td><?= sanitize($asset['location_name'] ?? 'Unassigned'); ?></td>
                         <td>
                             <?php
                             $badgeClass = match($asset['status']) {
@@ -134,68 +195,69 @@ $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAl
                             ?>
                             <span class="badge <?= $badgeClass; ?>"><?= $asset['status']; ?></span>
                         </td>
-                        <td><?= $asset['purchase_date'] ? date('M d, Y', strtotime($asset['purchase_date'])) : 'N/A'; ?></td>
-                        <td><?= $asset['purchase_cost'] !== null ? '$' . number_format($asset['purchase_cost'], 2) : 'N/A'; ?></td>
+                        <td><?= $asset['purchase_cost'] !== null ? '$' . number_format((float)$asset['purchase_cost'], 2) : 'N/A'; ?></td>
                         <td class="text-end">
                             <button type="button" class="btn btn-sm btn-info text-white me-1" 
                                     data-bs-toggle="modal" 
-                                    data-bs-target="#viewModal<?= $asset['id']; ?>">
+                                    data-bs-target="#viewModal<?= $asset['id']; ?>" title="View Details">
                                 <i class="bi-eye"></i>
                             </button>
-                            <a href="/assets/edit.php?id=<?= $asset['id']; ?>" class="btn btn-sm btn-warning me-1"><i class="bi-pencil"></i></a>
+                            <a href="/assets/create.php?clone_id=<?= $asset['id']; ?>" class="btn btn-sm btn-secondary me-1" title="Clone Asset">
+                                <i class="bi-copy"></i>
+                            </a>
+                            <a href="/assets/edit.php?id=<?= $asset['id']; ?>" class="btn btn-sm btn-warning me-1" title="Edit Asset">
+                                <i class="bi-pencil"></i>
+                            </a>
                             <form method="POST" action="/assets/delete.php" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this asset?');">
                                 <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token']; ?>">
                                 <input type="hidden" name="id" value="<?= $asset['id']; ?>">
-                                <button type="submit" class="btn btn-sm btn-danger"><i class="bi-trash"></i></button>
+                                <button type="submit" class="btn btn-sm btn-danger" title="Delete Asset"><i class="bi-trash"></i></button>
                             </form>
                         </td>
                     </tr>
-
-                    <!-- Detail View Modal -->
-                    <div class="modal fade" id="viewModal<?= $asset['id']; ?>" tabindex="-1">
-                        <div class="modal-dialog modal-dialog-centered">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <h5 class="modal-title">Asset Breakdown: <?= sanitize($asset['asset_tag']); ?></h5>
-                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                                </div>
-                                <div class="modal-body">
-                                    <p><strong>Name:</strong> <?= sanitize($asset['name']); ?></p>
-                                    <p><strong>Category:</strong> <?= sanitize($asset['category_name'] ?? 'Uncategorized'); ?></p>
-                                    <p><strong>Serial Number:</strong> <?= sanitize($asset['serial_number'] ?? 'N/A'); ?></p>
-                                    <p><strong>Status:</strong> <?= $asset['status']; ?></p>
-                                    <p><strong>Purchase Date:</strong> <?= $asset['purchase_date'] ?? 'N/A'; ?></p>
-                                    <p><strong>Purchase Cost:</strong> <?= $asset['purchase_cost'] ? '$' . number_format($asset['purchase_cost'], 2) : 'N/A'; ?></p>
-                                    <p><strong>Notes:</strong><br><?= nl2br(sanitize($asset['notes'] ?? 'No notes available.')); ?></p>
-                                    <hr>
-                                    <small class="text-muted d-block">Created At: <?= $asset['created_at']; ?></small>
-                                    <small class="text-muted d-block">Last Updated: <?= $asset['updated_at']; ?></small>
-                                </div>
-                                <div class="modal-footer">
-                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 <?php endforeach; ?>
             <?php endif; ?>
         </tbody>
     </table>
 </div>
 
-<!-- Pagination Links -->
-<?php if ($totalPages > 1): ?>
-    <nav class="mt-4">
-        <ul class="pagination justify-content-center">
-            <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                <li class="page-item <?= $i == $page ? 'active' : ''; ?>">
-                    <a class="page-link" href="?page=<?= $i; ?>&search=<?= urlencode($search); ?>&category_id=<?= $category_id; ?>&status=<?= urlencode($status); ?>">
-                        <?= $i; ?>
+<!-- Data Summary & Pagination Controls -->
+<div class="d-flex justify-content-between align-items-center mt-3 px-2">
+    <div class="text-muted small">
+        Showing <?= min($offset + 1, $totalAssets); ?> to <?= min($offset + $limit, $totalAssets); ?> of <?= $totalAssets; ?> total assets
+    </div>
+    
+    <?php if ($totalPages > 1): ?>
+        <nav>
+            <ul class="pagination mb-0">
+                <!-- Previous Page Button -->
+                <li class="page-item <?= ($page <= 1) ? 'disabled' : ''; ?>">
+                    <a class="page-link" href="?page=<?= $page - 1; ?>&search=<?= urlencode($search); ?>&category_id=<?= $category_id; ?>&brand_id=<?= $brand_id; ?>&location_id=<?= $location_id; ?>&status=<?= urlencode($status); ?>">
+                        &laquo; Previous
                     </a>
                 </li>
-            <?php endfor; ?>
-        </ul>
-    </nav>
-<?php endif; ?>
+
+                <!-- Numerical Page Buttons -->
+                <?php for ($i = 1; $i <= $totalPages; $i++): ?>
+                    <li class="page-item <?= ($i == $page) ? 'active' : ''; ?>">
+                        <a class="page-link" href="?page=<?= $i; ?>&search=<?= urlencode($search); ?>&category_id=<?= $category_id; ?>&brand_id=<?= $brand_id; ?>&location_id=<?= $location_id; ?>&status=<?= urlencode($status); ?>">
+                            <?= $i; ?>
+                        </a>
+                    </li>
+                <?php endfor; ?>
+
+                <!-- Next Page Button -->
+                <li class="page-item <?= ($page >= $totalPages) ? 'disabled' : ''; ?>">
+                    <a class="page-link" href="?page=<?= $page + 1; ?>&search=<?= urlencode($search); ?>&category_id=<?= $category_id; ?>&brand_id=<?= $brand_id; ?>&location_id=<?= $location_id; ?>&status=<?= urlencode($status); ?>">
+                        Next &raquo;
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    <?php endif; ?>
+</div>
 
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+
+// <?php require_once __DIR__ . '/../includes/footer.php'; ?>
+

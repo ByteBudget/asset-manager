@@ -31,7 +31,13 @@ require_once __DIR__ . '/../config/database.php';
                     <a class="nav-link" href="/assets/index.php"><i class="bi-list-task me-1"></i> Assets</a>
                 </li>
                 <li class="nav-item">
+                    <a class="nav-link" href="/locations/index.php"><i class="bi-geo-alt me-1"></i> Locations</a>
+                </li>
+                <li class="nav-item">
                     <a class="nav-link" href="/categories/index.php"><i class="bi-tags me-1"></i> Categories</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="/brands/index.php"><i class="bi-award me-1"></i> Brands</a>
                 </li>
             </ul>
         </div>

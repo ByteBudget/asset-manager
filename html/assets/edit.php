@@ -2,14 +2,17 @@
 require_once __DIR__ . '/../config/database.php';
 
 $pdo = getDBConnection();
-$id = filter_input(INPUT_GET, 'id', FILTER_VALIDATE_INT) ?: filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT);
 
-if (!$id) {
+// Robust ID detection from GET or POST
+$id = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_POST['id']) ? (int)$_POST['id'] : 0);
+
+if ($id <= 0) {
+    $_SESSION['flash_error'] = 'Invalid asset ID specified.';
     header('Location: /assets/index.php');
     exit;
 }
 
-// Fetch record
+// 1. Fetch existing asset record
 $stmt = $pdo->prepare("SELECT * FROM assets WHERE id = ?");
 $stmt->execute([$id]);
 $asset = $stmt->fetch();
@@ -27,10 +30,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $asset_tag    = trim($_POST['asset_tag'] ?? '');
     $name         = trim($_POST['name'] ?? '');
-    $category_id  = filter_input(INPUT_POST, 'category_id', FILTER_VALIDATE_INT) ?: null;
+    $category_id  = !empty($_POST['category_id']) ? (int)$_POST['category_id'] : null;
+    $location_id  = !empty($_POST['location_id']) ? (int)$_POST['location_id'] : null;
+    $brand_id     = !empty($_POST['brand_id']) ? (int)$_POST['brand_id'] : null;
+
     $serial_number= trim($_POST['serial_number'] ?? '') ?: null;
     $purchase_date= trim($_POST['purchase_date'] ?? '') ?: null;
-    $purchase_cost= filter_input(INPUT_POST, 'purchase_cost', FILTER_VALIDATE_FLOAT, FILTER_NULL_ON_FAILURE);
+    $purchase_cost= ($_POST['purchase_cost'] !== '' && $_POST['purchase_cost'] !== null) ? (float)$_POST['purchase_cost'] : null;
     $status       = trim($_POST['status'] ?? 'Available');
     $notes        = trim($_POST['notes'] ?? '') ?: null;
 
@@ -48,27 +54,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (empty($errors)) {
         $sql = "UPDATE assets SET 
-                asset_tag = ?, name = ?, category_id = ?, serial_number = ?, 
-                purchase_date = ?, purchase_cost = ?, status = ?, notes = ? 
+                asset_tag = ?, name = ?, category_id = ?, location_id = ?, brand_id = ?, 
+                serial_number = ?, purchase_date = ?, purchase_cost = ?, status = ?, notes = ? 
                 WHERE id = ?";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$asset_tag, $name, $category_id, $serial_number, $purchase_date, $purchase_cost, $status, $notes, $id]);
+        $stmt->execute([$asset_tag, $name, $category_id, $location_id, $brand_id, $serial_number, $purchase_date, $purchase_cost, $status, $notes, $id]);
 
         $_SESSION['flash_success'] = 'Asset updated successfully!';
         header('Location: /assets/index.php');
         exit;
     }
 } else {
-    // Populate form values from database
+    // Populate form default values from database record
     $_POST = $asset;
 }
 
+// Fetch categories, locations, and brands for option lists
 $categories = $pdo->query("SELECT * FROM categories ORDER BY name ASC")->fetchAll();
+$locations  = $pdo->query("SELECT * FROM locations ORDER BY name ASC")->fetchAll();
+$brands     = $pdo->query("SELECT * FROM brands ORDER BY name ASC")->fetchAll();
+
 require_once __DIR__ . '/../includes/header.php';
 ?>
 
 <div class="row justify-content-center">
-    <div class="col-md-8">
+    <div class="col-md-9">
         <div class="card shadow-sm">
             <div class="card-header bg-white">
                 <h4 class="card-title mb-0">Edit Asset: <?= sanitize($asset['asset_tag']); ?></h4>
@@ -84,7 +94,8 @@ require_once __DIR__ . '/../includes/header.php';
                     </div>
                 <?php endif; ?>
 
-                <form method="POST" action="/assets/edit.php">
+                <!-- Fixed Action URL preserving ID query string -->
+                <form method="POST" action="/assets/edit.php?id=<?= $id; ?>">
                     <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token']; ?>">
                     <input type="hidden" name="id" value="<?= $id; ?>">
                     
@@ -100,7 +111,7 @@ require_once __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div class="row g-3 mb-3">
-                        <div class="col-md-6">
+                        <div class="col-md-3">
                             <label class="form-label">Category</label>
                             <select name="category_id" class="form-select">
                                 <option value="">-- Select Category --</option>
@@ -111,7 +122,32 @@ require_once __DIR__ . '/../includes/header.php';
                                 <?php endforeach; ?>
                             </select>
                         </div>
-                        <div class="col-md-6">
+                        
+                        <div class="col-md-3">
+                            <label class="form-label">Brand</label>
+                            <select name="brand_id" class="form-select">
+                                <option value="">-- Select Brand --</option>
+                                <?php foreach ($brands as $b): ?>
+                                    <option value="<?= $b['id']; ?>" <?= (($_POST['brand_id'] ?? '') == $b['id']) ? 'selected' : ''; ?>>
+                                        <?= sanitize($b['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-md-3">
+                            <label class="form-label">Location</label>
+                            <select name="location_id" class="form-select">
+                                <option value="">-- Select Location --</option>
+                                <?php foreach ($locations as $loc): ?>
+                                    <option value="<?= $loc['id']; ?>" <?= (($_POST['location_id'] ?? '') == $loc['id']) ? 'selected' : ''; ?>>
+                                        <?= sanitize($loc['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="col-md-3">
                             <label class="form-label">Status</label>
                             <select name="status" class="form-select">
                                 <?php foreach (['Available', 'In Use', 'Under Maintenance', 'Retired'] as $st): ?>
