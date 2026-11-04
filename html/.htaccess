@@ -1,0 +1,15 @@
+# Turn on URL Rewriting Engine
+RewriteEngine On
+
+# Prevent Directory Browsing
+Options -Indexes
+
+# Security Headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# Protect sensitivity of system directories and configurations
+RewriteRule ^config/ - [F,L]
