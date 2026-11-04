@@ -15,8 +15,10 @@ $where  = [];
 $params = [];
 
 if ($search !== '') {
-    $where[] = "(a.asset_tag LIKE :search OR a.name LIKE :search OR a.serial_number LIKE :search)";
-    $params['search'] = "%{$search}%";
+    $where[] = "(a.asset_tag LIKE :search_tag OR a.name LIKE :search_name OR a.serial_number LIKE :search_serial)";
+    $params['search_tag']    = "%{$search}%";
+    $params['search_name']   = "%{$search}%";
+    $params['search_serial'] = "%{$search}%";
 }
 if ($category_id) {
     $where[] = "a.category_id = :category_id";
@@ -78,7 +80,7 @@ fputcsv($output, [
     'Notes',
     'Created At',
     'Updated At'
-]);
+], ',', '"', "\\");
 
 // Write Data Rows
 foreach ($assets as $row) {
@@ -95,7 +97,7 @@ foreach ($assets as $row) {
         $row['notes'] ?? '',
         $row['created_at'],
         $row['updated_at']
-    ]);
+    ], ',', '"', "\\");
 }
 
 fclose($output);
