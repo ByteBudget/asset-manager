@@ -12,8 +12,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
         $errors[] = 'Please select a valid CSV file to upload.';
     } else {
-        $fileTmpPath = $_FILES['csv_file']['tmp_name'];
-        $fileName    = $_FILES['csv_file']['name'];
+        $fileTmpPath   = $_FILES['csv_file']['tmp_name'];
+        $fileName      = $_FILES['csv_file']['name'];
         $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
 
         if ($fileExtension !== 'csv') {
@@ -21,32 +21,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $handle = fopen($fileTmpPath, 'r');
             if ($handle !== false) {
-                // Read and skip BOM marker if present (Excel export compatibility)
+                // Read and skip UTF-8 BOM marker if present (Excel export compatibility)
                 $bom = fread($handle, 3);
                 if ($bom !== "\xEF\xBB\xBF") {
                     rewind($handle);
                 }
 
-                // Parse Header Row
+                // Parse Header Row with explicit escape parameter for PHP 8.4+
                 $header = fgetcsv($handle, 0, ',', '"', "\\");
                 if ($header === false) {
                     $errors[] = 'The uploaded CSV file is empty.';
                 } else {
-                    // Map headers lowercased/trimmed
+                    // Map headers to lowecase trimmed strings
                     $headerMap = array_map(function($h) {
                         return strtolower(trim($h));
                     }, $header);
 
-                    // Validate minimal required columns
-                    if (!in_array('asset tag', $headerMap) || !in_array('name', $headerMap)) {
-                        $errors[] = 'Invalid CSV layout. Header must include "Asset Tag" and "Name".';
-                    } else {
-                        // Prepared lookup/insert helpers for entities
-                        $getCatStmt = $pdo->prepare("SELECT id FROM categories WHERE name = ?");
-                        $insCatStmt = $pdo->prepare("INSERT INTO categories (name) VALUES (?)");
+                    // Validate minimum required columns
+                    $hasTagColumn  = in_array('asset tag', $headerMap) || in_array('tag', $headerMap);
+                    $hasNameColumn = in_array('asset name', $headerMap) || in_array('name', $headerMap);
 
-                        $getLocStmt = $pdo->prepare("SELECT id FROM locations WHERE name = ?");
-                        $insLocStmt = $pdo->prepare("INSERT INTO locations (name) VALUES (?)");
+                    if (!$hasTagColumn || !$hasNameColumn) {
+                        $errors[] = 'Invalid CSV layout. Header must include "Asset Tag" and "Asset Name".';
+                    } else {
+                        // Prepared lookup and insert statements for foreign keys
+                        $getCatStmt   = $pdo->prepare("SELECT id FROM categories WHERE name = ?");
+                        $insCatStmt   = $pdo->prepare("INSERT INTO categories (name) VALUES (?)");
+
+                        $getLocStmt   = $pdo->prepare("SELECT id FROM locations WHERE name = ?");
+                        $insLocStmt   = $pdo->prepare("INSERT INTO locations (name) VALUES (?)");
 
                         $getBrandStmt = $pdo->prepare("SELECT id FROM brands WHERE name = ?");
                         $insBrandStmt = $pdo->prepare("INSERT INTO brands (name) VALUES (?)");
@@ -54,9 +57,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $chkAssetStmt = $pdo->prepare("SELECT id FROM assets WHERE asset_tag = ?");
                         $insAssetStmt = $pdo->prepare("INSERT INTO assets (asset_tag, name, category_id, location_id, brand_id, serial_number, purchase_date, purchase_cost, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
-                        $rowNum = 1; // Tracks row count
+                        // Parse rows using explicit delimiter, enclosure, and escape character
                         while (($data = fgetcsv($handle, 0, ',', '"', "\\")) !== false) {
-                            $rowNum++;
                             if (count($data) < count($headerMap)) {
                                 continue; // Skip malformed rows
                             }
@@ -64,26 +66,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $row = array_combine($headerMap, array_map('trim', $data));
 
                             $assetTag = $row['asset tag'] ?? $row['tag'] ?? '';
-                            $name     = $row['name'] ?? '';
+                            $name     = $row['asset name'] ?? $row['name'] ?? '';
 
                             if (empty($name)) {
                                 $skippedCount++;
                                 continue;
                             }
 
-                            // If Asset Tag is empty, generate sequential tag
+                            // Generate sequential tag if tag is missing
                             if (empty($assetTag)) {
                                 $assetTag = generateNextAssetTag('AST-', 5);
                             } else {
-                                // Check for existing Asset Tag
+                                // Skip duplicate asset tags
                                 $chkAssetStmt->execute([$assetTag]);
                                 if ($chkAssetStmt->fetch()) {
-                                    $skippedCount++; // Duplicate Tag found
+                                    $skippedCount++;
                                     continue;
                                 }
                             }
 
-                            // 1. Resolve Category ID (auto-create if missing)
+                            // 1. Resolve Category ID
                             $categoryId = null;
                             $catName = $row['category'] ?? '';
                             if ($catName !== '' && strtolower($catName) !== 'uncategorized') {
@@ -97,21 +99,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
                             }
 
-                            // 2. Resolve Location ID (auto-create if missing)
-                            $locationId = null;
-                            $locName = $row['location'] ?? '';
-                            if ($locName !== '' && strtolower($locName) !== 'unassigned') {
-                                $getLocStmt->execute([$locName]);
-                                $loc = $getLocStmt->fetch();
-                                if ($loc) {
-                                    $locationId = $loc['id'];
-                                } else {
-                                    $insLocStmt->execute([$locName]);
-                                    $locationId = $pdo->lastInsertId();
-                                }
-                            }
-
-                            // 3. Resolve Brand ID (auto-create if missing)
+                            // 2. Resolve Brand ID
                             $brandId = null;
                             $brandName = $row['brand'] ?? '';
                             if ($brandName !== '' && strtolower($brandName) !== 'unassigned') {
@@ -125,14 +113,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
                             }
 
-                            // 4. Parse Remaining Optional Fields
+                            // 3. Resolve Location ID
+                            $locationId = null;
+                            $locName = $row['location'] ?? '';
+                            if ($locName !== '' && strtolower($locName) !== 'unassigned') {
+                                $getLocStmt->execute([$locName]);
+                                $loc = $getLocStmt->fetch();
+                                if ($loc) {
+                                    $locationId = $loc['id'];
+                                } else {
+                                    $insLocStmt->execute([$locName]);
+                                    $locationId = $pdo->lastInsertId();
+                                }
+                            }
+
+                            // 4. Parse Optional Fields
                             $serialNumber = $row['serial number'] ?? $row['serial'] ?? null;
                             $serialNumber = ($serialNumber === 'N/A' || $serialNumber === '') ? null : $serialNumber;
 
                             $purchaseDate = $row['purchase date'] ?? null;
                             $purchaseDate = ($purchaseDate === 'N/A' || $purchaseDate === '') ? null : date('Y-m-d', strtotime($purchaseDate));
 
-                            $costRaw = $row['purchase cost'] ?? $row['cost'] ?? null;
+                            $costRaw = $row['purchase cost ($)'] ?? $row['purchase cost'] ?? $row['cost'] ?? null;
                             $purchaseCost = null;
                             if ($costRaw !== null && $costRaw !== 'N/A') {
                                 $costClean = preg_replace('/[^0-9.]/', '', $costRaw);
@@ -146,7 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                             $notes = $row['notes'] ?? null;
 
-                            // Insert New Asset
+                            // Execute Asset Insertion
                             $insAssetStmt->execute([
                                 $assetTag, $name, $categoryId, $locationId, $brandId,
                                 $serialNumber, $purchaseDate, $purchaseCost, $status, $notes
@@ -191,12 +193,12 @@ require_once __DIR__ . '/../includes/header.php';
                 <?php endif; ?>
 
                 <div class="alert alert-info">
-                    <h6 class="alert-heading"><i class="bi-info-circle me-1"></i> File Guidelines</h6>
-                    <p class="mb-1 small">Your CSV header row should contain the following column names:</p>
-                    <code class="d-block bg-white p-2 border rounded mb-2">Asset Tag, Name, Category, Brand, Location, Status, Serial Number, Purchase Date, Purchase Cost, Notes</code>
+                    <h6 class="alert-heading"><i class="bi-info-circle me-1"></i> File Format Alignment</h6>
+                    <p class="mb-1 small">This import tool directly parses CSV files created by the Export function using these exact headers:</p>
+                    <code class="d-block bg-white p-2 border rounded mb-2">Asset Tag, Asset Name, Category, Brand, Location, Serial Number, Status, Purchase Date, Purchase Cost ($), Notes, Created At, Updated At</code>
                     <ul class="mb-0 small text-muted">
-                        <li><strong>Categories, Brands & Locations:</strong> If a Category, Brand, or Location in the CSV does not exist in the database, it will be automatically created.</li>
-                        <li><strong>Duplicate Tags:</strong> Rows with existing Asset Tags will be automatically skipped to prevent collisions.</li>
+                        <li><strong>Auto Creation:</strong> Missing Categories, Brands, or Locations in the CSV will be automatically created in the database.</li>
+                        <li><strong>Duplicate Tag Protection:</strong> Assets with existing <code>Asset Tag</code> identifiers will be safely skipped.</li>
                     </ul>
                 </div>
 
