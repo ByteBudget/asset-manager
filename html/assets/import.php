@@ -28,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 // Parse Header Row
-                $header = fgetcsv($handle);
+                $header = fgetcsv($handle, 0, ',', '"', "\\");
                 if ($header === false) {
                     $errors[] = 'The uploaded CSV file is empty.';
                 } else {
@@ -38,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }, $header);
 
                     // Validate minimal required columns
-                    if (!in_array('Asset Tag', $headerMap) || !in_array('Asset Name', $headerMap)) {
+                    if (!in_array('asset tag', $headerMap) || !in_array('name', $headerMap)) {
                         $errors[] = 'Invalid CSV layout. Header must include "Asset Tag" and "Name".';
                     } else {
                         // Prepared lookup/insert helpers for entities
@@ -55,7 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $insAssetStmt = $pdo->prepare("INSERT INTO assets (asset_tag, name, category_id, location_id, brand_id, serial_number, purchase_date, purchase_cost, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
                         $rowNum = 1; // Tracks row count
-                        while (($data = fgetcsv($handle)) !== false) {
+                        while (($data = fgetcsv($handle, 0, ',', '"', "\\")) !== false) {
                             $rowNum++;
                             if (count($data) < count($headerMap)) {
                                 continue; // Skip malformed rows
